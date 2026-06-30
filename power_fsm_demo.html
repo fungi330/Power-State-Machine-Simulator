@@ -93,7 +93,7 @@
 <body>
 
 <h1>💻 筆電 EC 電源狀態機模擬器</h1>
-<div class="sub">對應 power_register bit 運算</div>
+<div class="sub">對應 main.c — handle_state_machine() / power_register bit 運算</div>
 
 <div class="layout">
 
@@ -137,8 +137,11 @@
 const BIT = { CPU:0, RAM:1, SCREEN:2, FAN:3 };
 const STATE = { S5_OFF:'S5_OFF', S0_ON:'S0_ON', S3_SLEEP:'S3_SLEEP' };
 
-let power_register = 0x00;
-let current_state = STATE.S5_OFF;
+// 對應 C 的 HardwareStatus struct { SystemState current_state; uint8_t power_register; }
+let status = {
+  current_state: STATE.S5_OFF,
+  power_register: 0x00
+};
 
 const hwLabels = [
   {bit:BIT.CPU,    name:'CPU 電源',  icon:'🧠'},
@@ -147,53 +150,55 @@ const hwLabels = [
   {bit:BIT.FAN,    name:'風扇電源',  icon:'🌀'},
 ];
 
-function setBit(mask){ power_register |= mask; }
-function clearBit(mask){ power_register &= ~mask & 0xFF; }
+function setBit(s, mask){ s.power_register |= mask; }
+function clearBit(s, mask){ s.power_register &= ~mask & 0xFF; }
 
 // ===== 狀態機核心 =====
-function handle_state_machine(state, event){
-  if(state === STATE.S5_OFF){
+function handle_state_machine(status, event){
+  const current_state = status.current_state;
+
+  if(current_state === STATE.S5_OFF){
     if(event === 'POWER_BTN'){
       log('[系統] 接收到電源鍵，準備開機...', true);
-      setBit((1<<BIT.CPU)|(1<<BIT.RAM)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      setBit(status, (1<<BIT.CPU)|(1<<BIT.RAM)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
       return STATE.S0_ON;
     }
-  } else if(state === STATE.S0_ON){
+  } else if(current_state === STATE.S0_ON){
     if(event === 'POWER_BTN' || event === 'BAT_LOW'){
       log('[系統] 觸發關機程序...', true);
-      power_register = 0x00;
+      status.power_register = 0x00;
       return STATE.S5_OFF;
     } else if(event === 'LID_CLOSE'){
       log('[系統] 螢幕闔上，進入 S3 睡眠模式...', true);
-      clearBit((1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
-      setBit(1<<BIT.RAM); // S3 RAM 保持供電
+      clearBit(status, (1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      setBit(status, 1<<BIT.RAM); // S3 RAM 保持供電
       return STATE.S3_SLEEP;
     }
-  } else if(state === STATE.S3_SLEEP){
+  } else if(current_state === STATE.S3_SLEEP){
     if(event === 'LID_OPEN' || event === 'POWER_BTN'){
       log('[系統] 喚醒事件觸發，回到 S0 運作狀態...', true);
-      setBit((1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      setBit(status, (1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
       return STATE.S0_ON;
     } else if(event === 'BAT_LOW'){
       log('[系統] 睡眠時電量耗盡，強制關機保護...', true);
-      power_register = 0x00;
+      status.power_register = 0x00;
       return STATE.S5_OFF;
     }
   }
   log('（無效事件，狀態不變）', false);
-  return state;
+  return current_state;
 }
 
 function fireEvent(evt){
   const evtNames = {POWER_BTN:'EVENT_POWER_BTN', LID_CLOSE:'EVENT_LID_CLOSE', LID_OPEN:'EVENT_LID_OPEN', BAT_LOW:'EVENT_BAT_LOW'};
   log('>> 輸入事件: ' + evtNames[evt], 'evt');
-  current_state = handle_state_machine(current_state, evt);
+  status.current_state = handle_state_machine(status, evt);
   render();
 }
 
 function resetFSM(){
-  power_register = 0x00;
-  current_state = STATE.S5_OFF;
+  status.power_register = 0x00;
+  status.current_state = STATE.S5_OFF;
   document.getElementById('logBox').innerHTML = '';
   log('--- 系統重置，回到 S5 OFF ---', 'evt');
   render();
@@ -214,17 +219,17 @@ function render(){
     document.getElementById('node-'+s).classList.remove('active');
   });
   const map = {S5_OFF:'S5', S0_ON:'S0', S3_SLEEP:'S3'};
-  document.getElementById('node-'+map[current_state]).classList.add('active');
+  document.getElementById('node-'+map[status.current_state]).classList.add('active');
 
   // 暫存器 hex
   document.getElementById('regHex').textContent =
-    '0x' + power_register.toString(16).toUpperCase().padStart(2,'0');
+    '0x' + status.power_register.toString(16).toUpperCase().padStart(2,'0');
 
   // bit 顯示 (bit3 -> bit0)
   const bitsRow = document.getElementById('bitsRow');
   bitsRow.innerHTML = '';
   for(let i=7;i>=0;i--){
-    const on = (power_register >> i) & 1;
+    const on = (status.power_register >> i) & 1;
     const d = document.createElement('div');
     d.className = 'bit' + (on?' on':'');
     d.textContent = on;
@@ -235,7 +240,7 @@ function render(){
   const hwGrid = document.getElementById('hwGrid');
   hwGrid.innerHTML = '';
   hwLabels.forEach(h=>{
-    const on = (power_register & (1<<h.bit)) !== 0;
+    const on = (status.power_register & (1<<h.bit)) !== 0;
     const div = document.createElement('div');
     div.className = 'hw-item ' + (on?'on':'off');
     div.innerHTML = `<div class="led"></div><div class="label">${h.icon} ${h.name}</div><div class="status">${on?'ON':'OFF'}</div>`;

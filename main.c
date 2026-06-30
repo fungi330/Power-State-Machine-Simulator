@@ -9,16 +9,13 @@
 #define PWR_SCREEN_BIT 2  // Bit 2: 螢幕電源
 #define PWR_FAN_BIT    3  // Bit 3: 風扇電源
 
-// 模擬的硬體暫存器 (全域變數)
-uint8_t power_register = 0x00; // 初始全為 0 (全部斷電)
-
 // ---------------------------------------------------------
 // 定義系統狀態與事件
 // ---------------------------------------------------------
 typedef enum {
     STATE_S5_OFF, // 關機狀態 (G3/S5)
     STATE_S0_ON,      // 運作狀態 (S0)
-    STATE_S3_SLEEP    // 睡眠狀態 (S3 - Suspend to RAM)
+    STATE_S3_SLEEP    // 睡眠狀態 (S3)
 } SystemState;
 
 typedef enum {
@@ -29,10 +26,16 @@ typedef enum {
     EVENT_NONE        // 無事件
 } SystemEvent;
 
+typedef struct {
+    SystemState current_state;
+    uint8_t power_register;
+} HardwareStatus;
+
 // ---------------------------------------------------------
 // 印出當前硬體電源狀態 (檢驗位元運算結果)
 // ---------------------------------------------------------
-void print_hardware_status() {
+void print_hardware_status(HardwareStatus *status) {
+    uint8_t power_register = status->power_register;
     printf("--- 硬體狀態 [暫存器值: 0x%02X] ---\n", power_register);
     printf("CPU: %s | ",  (power_register & (1 << PWR_CPU_BIT)) ? "ON" : "OFF");
     printf("RAM: %s | ",  (power_register & (1 << PWR_RAM_BIT)) ? "ON" : "OFF");
@@ -44,16 +47,17 @@ void print_hardware_status() {
 // ---------------------------------------------------------
 // 電源狀態機 (Finite State Machine)
 // ---------------------------------------------------------
-SystemState handle_state_machine(SystemState current_state, SystemEvent event) {
-    switch (current_state) {
+SystemState handle_state_machine(HardwareStatus *status, SystemEvent event) {
+
+    switch (status->current_state) {
         
         // --- 當前處於：S5 關機狀態 ---
         case STATE_S5_OFF:
             if (event == EVENT_POWER_BTN) {
                 printf("[系統] 接收到電源鍵，準備開機...\n");
                 // 將 CPU, RAM, 螢幕, 風扇全部打開
-                power_register |= (1 << PWR_CPU_BIT) | (1 << PWR_RAM_BIT) | 
-                                  (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT);
+                status->power_register |= (1 << PWR_CPU_BIT) | (1 << PWR_RAM_BIT) | 
+                                          (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT);
                 return STATE_S0_ON;
             }
             break;
@@ -63,15 +67,15 @@ SystemState handle_state_machine(SystemState current_state, SystemEvent event) {
             if (event == EVENT_POWER_BTN || event == EVENT_BAT_LOW) {
                 printf("[系統] 觸發關機程序...\n");
                 // 將所有電源切斷
-                power_register = 0x00;
+                status->power_register = 0x00;
                 return STATE_S5_OFF;
             } 
             else if (event == EVENT_LID_CLOSE) {
                 printf("[系統] 螢幕闔上，進入 S3 睡眠模式...\n");
                 // 關閉 CPU, 螢幕, 風扇
-                power_register &= ~((1 << PWR_CPU_BIT) | (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT));
+                status->power_register &= ~((1 << PWR_CPU_BIT) | (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT));
                 // 進入 S3 時，RAM 必須保持供電以保存資料
-                power_register |= (1 << PWR_RAM_BIT);
+                status->power_register |= (1 << PWR_RAM_BIT);
                 return STATE_S3_SLEEP;
             }
             break;
@@ -81,19 +85,19 @@ SystemState handle_state_machine(SystemState current_state, SystemEvent event) {
             if (event == EVENT_LID_OPEN || event == EVENT_POWER_BTN) {
                 printf("[系統] 喚醒事件觸發，回到 S0 運作狀態...\n");
                 // 恢復 CPU, 螢幕, 風扇供電
-                power_register |= (1 << PWR_CPU_BIT) | (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT);
+                status->power_register |= (1 << PWR_CPU_BIT) | (1 << PWR_SCREEN_BIT) | (1 << PWR_FAN_BIT);
                 return STATE_S0_ON;
             }
             else if (event == EVENT_BAT_LOW) {
                 printf("[系統] 睡眠時電量耗盡，強制關機保護...\n");
-                power_register = 0x00; // 切斷 RAM 的電
+                status->power_register = 0x00; // 切斷 RAM 的電
                 return STATE_S5_OFF;
             }
             break;
     }
     
     // 如果沒有匹配的事件，維持原狀態
-    return current_state;
+    return status->current_state;
 }
 
 // ---------------------------------------------------------
@@ -101,10 +105,12 @@ SystemState handle_state_machine(SystemState current_state, SystemEvent event) {
 // ---------------------------------------------------------
 int main() {
     SystemState current_state = STATE_S5_OFF;
+    uint8_t power_register = 0x00; // 初始全為 0 (全部斷電)
+    HardwareStatus status = {current_state, power_register};
     int user_input;
 
     printf("=== 筆電 EC 電源狀態機模擬器 ===\n");
-    print_hardware_status();
+    print_hardware_status(&status);
 
     while (1) {
         printf("目前狀態: %s\n", 
@@ -127,10 +133,10 @@ int main() {
         }
 
         // 驅動狀態機
-        current_state = handle_state_machine(current_state, current_event);
+        current_state = handle_state_machine(&status, current_event);
         
         // 印出操作後的硬體狀態
-        print_hardware_status();
+        print_hardware_status(&status);
     }
 
     return 0;
