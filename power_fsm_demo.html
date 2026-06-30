@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>筆電 EC 電源狀態機模擬器</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d;
+    --green:#3fb950; --red:#f85149; --amber:#d29922; --blue:#58a6ff;
+    --text:#c9d1d9; --muted:#8b949e;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:20px;
+  }
+  h1{font-size:20px; margin:0; color:#fff;}
+  .sub{color:var(--muted); font-size:13px; margin-top:-12px;}
+
+  .layout{display:flex; gap:20px; flex-wrap:wrap; justify-content:center; width:100%; max-width:1000px;}
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:18px; flex:1; min-width:280px;
+  }
+  .panel h2{font-size:14px; margin:0 0 12px 0; color:var(--blue); letter-spacing:.5px;}
+
+  /* 狀態機圖 */
+  .fsm-states{display:flex; justify-content:space-around; align-items:center; margin-bottom:8px;}
+  .state-node{
+    width:90px; height:90px; border-radius:50%; border:3px solid var(--border);
+    display:flex; align-items:center; justify-content:center; flex-direction:column;
+    font-weight:bold; font-size:13px; color:var(--muted); transition:all .25s;
+  }
+  .state-node.active{
+    border-color:var(--green); color:#fff; background:rgba(63,185,80,.15);
+    box-shadow:0 0 16px rgba(63,185,80,.5); transform:scale(1.08);
+  }
+  .arrow{color:var(--muted); font-size:20px;}
+
+  /* 暫存器 */
+  .reg-box{
+    font-family:"Consolas",monospace; font-size:28px; text-align:center;
+    background:#010409; border:1px solid var(--border); border-radius:8px;
+    padding:14px; margin-bottom:14px; color:var(--amber); letter-spacing:2px;
+  }
+  .bits{display:flex; justify-content:center; gap:6px; margin-top:6px;}
+  .bit{
+    width:28px; height:28px; border-radius:4px; border:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--muted);
+  }
+  .bit.on{background:var(--green); color:#000; font-weight:bold; border-color:var(--green);}
+
+  /* 硬體燈號 */
+  .hw-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .hw-item{
+    background:#010409; border:1px solid var(--border); border-radius:8px;
+    padding:12px; text-align:center;
+  }
+  .hw-item .led{
+    width:14px; height:14px; border-radius:50%; margin:0 auto 6px auto; background:#3a3f47;
+  }
+  .hw-item.on .led{background:var(--green); box-shadow:0 0 10px var(--green);}
+  .hw-item.off .led{background:var(--red); opacity:.4;}
+  .hw-item .label{font-size:12px; color:var(--muted);}
+  .hw-item .status{font-size:13px; font-weight:bold; margin-top:2px;}
+  .hw-item.on .status{color:var(--green);}
+  .hw-item.off .status{color:var(--red);}
+
+  /* 事件按鈕 */
+  .btn-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px;}
+  button{
+    padding:14px 8px; border-radius:8px; border:1px solid var(--border);
+    background:#21262d; color:var(--text); font-size:13px; cursor:pointer;
+    transition:all .15s; font-weight:500;
+  }
+  button:hover:not(:disabled){background:#30363d; border-color:var(--blue); transform:translateY(-1px);}
+  button:disabled{opacity:.3; cursor:not-allowed;}
+  button.reset{background:#3d1418; border-color:var(--red); color:#ffb3ab; grid-column:1/3;}
+  button.reset:hover{background:#5a1d22;}
+
+  /* Log */
+  .log-box{
+    background:#010409; border:1px solid var(--border); border-radius:8px;
+    padding:10px; height:170px; overflow-y:auto; font-family:Consolas,monospace; font-size:12px;
+  }
+  .log-line{padding:3px 0; border-bottom:1px dashed #21262d; color:var(--muted);}
+  .log-line.evt{color:var(--blue);}
+  .log-line:last-child{color:#fff;}
+  code.snippet{display:block; background:#010409; border:1px solid var(--border); border-radius:6px; padding:8px; margin-top:8px; font-size:11px; color:#7ee787; white-space:pre-wrap;}
+</style>
+</head>
+<body>
+
+<h1>💻 筆電 EC 電源狀態機模擬器</h1>
+<div class="sub">對應 power_register bit 運算</div>
+
+<div class="layout">
+
+  <!-- 左側：狀態機 + 暫存器 + 硬體 -->
+  <div class="panel" style="flex:1.3">
+    <h2>SYSTEM STATE (S5 / S0 / S3)</h2>
+    <div class="fsm-states">
+      <div class="state-node" id="node-S5">S5<br>關機</div>
+      <div class="arrow">⇄</div>
+      <div class="state-node" id="node-S0">S0<br>運作中</div>
+      <div class="arrow">⇄</div>
+      <div class="state-node" id="node-S3">S3<br>睡眠</div>
+    </div>
+
+    <h2 style="margin-top:18px;">POWER REGISTER (uint8_t)</h2>
+    <div class="reg-box" id="regHex">0x00</div>
+    <div class="bits" id="bitsRow"></div>
+
+    <h2 style="margin-top:18px;">硬體電源狀態</h2>
+    <div class="hw-grid" id="hwGrid"></div>
+  </div>
+
+  <!-- 右側：事件 + log -->
+  <div class="panel" style="flex:1">
+    <h2>觸發事件 (Event Input)</h2>
+    <div class="btn-grid">
+      <button id="b1" onclick="fireEvent('POWER_BTN')">⏻ 按電源鍵</button>
+      <button id="b2" onclick="fireEvent('LID_CLOSE')">🔽 闔上螢幕</button>
+      <button id="b3" onclick="fireEvent('LID_OPEN')">🔼 打開螢幕</button>
+      <button id="b4" onclick="fireEvent('BAT_LOW')">🔋 電量過低</button>
+      <button class="reset" onclick="resetFSM()">🔄 重置 (回到 S5)</button>
+    </div>
+
+    <h2 style="margin-top:18px;">事件紀錄 / Console Log</h2>
+    <div class="log-box" id="logBox"></div>
+  </div>
+</div>
+
+<script>
+// ===== 對應 main.c 的常數 =====
+const BIT = { CPU:0, RAM:1, SCREEN:2, FAN:3 };
+const STATE = { S5_OFF:'S5_OFF', S0_ON:'S0_ON', S3_SLEEP:'S3_SLEEP' };
+
+let power_register = 0x00;
+let current_state = STATE.S5_OFF;
+
+const hwLabels = [
+  {bit:BIT.CPU,    name:'CPU 電源',  icon:'🧠'},
+  {bit:BIT.RAM,    name:'記憶體電源', icon:'💾'},
+  {bit:BIT.SCREEN, name:'螢幕電源',  icon:'🖥️'},
+  {bit:BIT.FAN,    name:'風扇電源',  icon:'🌀'},
+];
+
+function setBit(mask){ power_register |= mask; }
+function clearBit(mask){ power_register &= ~mask & 0xFF; }
+
+// ===== 狀態機核心 =====
+function handle_state_machine(state, event){
+  if(state === STATE.S5_OFF){
+    if(event === 'POWER_BTN'){
+      log('[系統] 接收到電源鍵，準備開機...', true);
+      setBit((1<<BIT.CPU)|(1<<BIT.RAM)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      return STATE.S0_ON;
+    }
+  } else if(state === STATE.S0_ON){
+    if(event === 'POWER_BTN' || event === 'BAT_LOW'){
+      log('[系統] 觸發關機程序...', true);
+      power_register = 0x00;
+      return STATE.S5_OFF;
+    } else if(event === 'LID_CLOSE'){
+      log('[系統] 螢幕闔上，進入 S3 睡眠模式...', true);
+      clearBit((1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      setBit(1<<BIT.RAM); // S3 RAM 保持供電
+      return STATE.S3_SLEEP;
+    }
+  } else if(state === STATE.S3_SLEEP){
+    if(event === 'LID_OPEN' || event === 'POWER_BTN'){
+      log('[系統] 喚醒事件觸發，回到 S0 運作狀態...', true);
+      setBit((1<<BIT.CPU)|(1<<BIT.SCREEN)|(1<<BIT.FAN));
+      return STATE.S0_ON;
+    } else if(event === 'BAT_LOW'){
+      log('[系統] 睡眠時電量耗盡，強制關機保護...', true);
+      power_register = 0x00;
+      return STATE.S5_OFF;
+    }
+  }
+  log('（無效事件，狀態不變）', false);
+  return state;
+}
+
+function fireEvent(evt){
+  const evtNames = {POWER_BTN:'EVENT_POWER_BTN', LID_CLOSE:'EVENT_LID_CLOSE', LID_OPEN:'EVENT_LID_OPEN', BAT_LOW:'EVENT_BAT_LOW'};
+  log('>> 輸入事件: ' + evtNames[evt], 'evt');
+  current_state = handle_state_machine(current_state, evt);
+  render();
+}
+
+function resetFSM(){
+  power_register = 0x00;
+  current_state = STATE.S5_OFF;
+  document.getElementById('logBox').innerHTML = '';
+  log('--- 系統重置，回到 S5 OFF ---', 'evt');
+  render();
+}
+
+function log(msg, type){
+  const box = document.getElementById('logBox');
+  const line = document.createElement('div');
+  line.className = 'log-line' + (type==='evt' ? ' evt' : '');
+  line.textContent = msg;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function render(){
+  // 狀態節點
+  ['S5','S0','S3'].forEach(s=>{
+    document.getElementById('node-'+s).classList.remove('active');
+  });
+  const map = {S5_OFF:'S5', S0_ON:'S0', S3_SLEEP:'S3'};
+  document.getElementById('node-'+map[current_state]).classList.add('active');
+
+  // 暫存器 hex
+  document.getElementById('regHex').textContent =
+    '0x' + power_register.toString(16).toUpperCase().padStart(2,'0');
+
+  // bit 顯示 (bit3 -> bit0)
+  const bitsRow = document.getElementById('bitsRow');
+  bitsRow.innerHTML = '';
+  for(let i=7;i>=0;i--){
+    const on = (power_register >> i) & 1;
+    const d = document.createElement('div');
+    d.className = 'bit' + (on?' on':'');
+    d.textContent = on;
+    bitsRow.appendChild(d);
+  }
+
+  // 硬體燈號
+  const hwGrid = document.getElementById('hwGrid');
+  hwGrid.innerHTML = '';
+  hwLabels.forEach(h=>{
+    const on = (power_register & (1<<h.bit)) !== 0;
+    const div = document.createElement('div');
+    div.className = 'hw-item ' + (on?'on':'off');
+    div.innerHTML = `<div class="led"></div><div class="label">${h.icon} ${h.name}</div><div class="status">${on?'ON':'OFF'}</div>`;
+    hwGrid.appendChild(div);
+  });
+}
+
+// 初始畫面
+log('=== 筆電 EC 電源狀態機模擬器啟動 ===', 'evt');
+render();
+</script>
+</body>
+</html>
